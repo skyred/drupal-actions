@@ -13,31 +13,31 @@ Once integrate with your Drupal project, this action will automatically run the 
 
 ```yaml
 name: Drupal CI
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+
+on: [push]
 
 jobs:
-  drupal-ci:
-    uses: your-org/drupal-ci-action@main
-    with:
-      drupal_version: '10.2'
-      php_version: '8.3'
-      mysql_version: '5.7'
-      phpunit_coverage_path: 'coverage'
-      phpunit_config_file: 'phpunit.xml'
-      test_target_directory: 'modules/custom'
-      junit_path: 'junit'
-      simpletest_db: 'mysql://root:mysql_strong_password@mysql/drupal'
-      browsertest_output_directory: '.tmp/browser_output'
-      simpletest_base_url: 'http://localhost'
-      phpcs_config_file: 'phpcs.xml'
-      phpcs_target_directory: 'modules/custom themes/custom'
-      phpstan_config_file: 'phpstan.neon'
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: tests
+      uses: skyred/drupal-actions@v0
+      with:
+        drupal_version: '10.4'
+        php_version: '8.2'
+        mysql_version: 'latest'
+        phpunit_coverage_path: 'coverage'
+        phpunit_config_file: 'phpunit.xml'
+        test_target_directory: 'modules/custom'
+        junit_path: 'junit'
+        simpletest_db: 'mysql://root:mysql_strong_password@mysql/drupal'
+        browsertest_output_directory: '.tmp/browser_output'
+        simpletest_base_url: 'http://localhost'
+        phpcs_config_file: 'phpcs.xml'
+        phpcs_target_directory: 'modules/custom/custom'
+        phpstan_config_file: 'phpstan.neon'
+
 ```
 
 ### Prerequisites for Consuming Repositories
