@@ -1,4 +1,4 @@
-name: 'Drupal CI'
+name: 'Drupal Actions'
 description: 'Run PHPUnit tests, PHPCS, and PHPStan analysis for Drupal 10 projects in a Drupal container'
 author: 'skyredwang on drupal.org'
 branding:
