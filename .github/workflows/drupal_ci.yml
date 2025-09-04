@@ -1,0 +1,293 @@
+name: Drupal Continuous Integration
+
+on:
+  push:
+  workflow_call:
+    inputs:
+      drupal_version:
+        description: 'Drupal version'
+        required: false
+        type: string
+        default: 'latest'
+      php_version:
+        description: 'PHP version to use'
+        required: false
+        type: string
+        default: 'latest'
+      mysql_version:
+        description: 'MySQL version to use'
+        required: false
+        type: string
+        default: 'latest'
+      phpunit_coverage_path:
+        description: 'Path for PHPUnit coverage output'
+        required: false
+        type: string
+        default: 'coverage'
+      phpunit_config_file:
+        description: 'PHPUnit configuration file'
+        required: false
+        type: string
+        default: 'phpunit.xml'
+      test_target_directory:
+        description: 'Target directory for tests'
+        required: false
+        type: string
+        default: ''
+      junit_path:
+        description: 'Path for JUnit output'
+        required: false
+        type: string
+        default: 'junit'
+      simpletest_db:
+        description: 'Database connection string for Simpletest'
+        required: false
+        type: string
+        default: 'mysql://root:mysql_strong_password@mysql/drupal'
+      browsertest_output_directory:
+        description: 'Browser test output directory'
+        required: false
+        type: string
+        default: '.tmp/browser_output'
+      simpletest_base_url:
+        description: 'Base URL for Simpletest'
+        required: false
+        type: string
+        default: 'http://localhost'
+      phpcs_config_file:
+        description: 'PHPCS configuration file'
+        required: false
+        type: string
+        default: 'phpcs.xml'
+      phpcs_target_directory:
+        description: 'Target directory for PHPCS'
+        required: false
+        type: string
+        default: 'modules/custom'
+      phpstan_config_file:
+        description: 'PHPStan configuration file'
+        required: false
+        type: string
+        default: 'phpstan.neon'
+
+jobs:
+  phpunit-coverage:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.drupal_version && inputs.php_version && format('drupal:{0}-php{1}-apache', inputs.drupal_version, inputs.php_version) || 'drupal:latest' }}
+      volumes:
+        - ${{ github.workspace }}:/opt/drupal
+    services:
+      mysql:
+        image: mysql:${{ inputs.mysql_version || 'latest' }}
+        env:
+          MYSQL_ROOT_PASSWORD: mysql_strong_password
+          MYSQL_DATABASE: drupal
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3306:3306
+
+    env:
+      PHPUNIT_COVERAGE_PATH: /opt/drupal/${{ inputs.phpunit_coverage_path || 'coverage' }}
+      PHPUNIT_CONFIG_FILE: /opt/drupal/${{ inputs.phpunit_config_file || 'phpunit.xml' }}
+      TEST_TARGET_DIRECTORY: ${{ inputs.test_target_directory || '' }}
+      JUNIT_PATH: /opt/drupal/${{ inputs.junit_path || 'junit' }}
+      SIMPLETEST_DB: ${{ inputs.simpletest_db || 'mysql://root:mysql_strong_password@mysql/drupal' }}
+      BROWSERTEST_OUTPUT_DIRECTORY: /opt/drupal/${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
+      SIMPLETEST_BASE_URL: ${{ inputs.simpletest_base_url || 'http://localhost' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Update package index
+        run: apt-get update -y && apt-get upgrade -y
+
+      - name: Install system dependencies
+        run: |
+          apt-get install -y git zip unzip wget gnupg acl curl libzip-dev libpng-dev default-mysql-client jq
+
+      - name: Install PCOV
+        run: |
+          pecl install pcov
+          docker-php-ext-enable pcov
+
+      - name: Install project dependencies
+        run: |
+          set -x  # Enable shell debugging
+          echo "Working directory:"
+          pwd
+          composer clear-cache
+          composer install --no-progress --prefer-dist --optimize-autoloader
+          ls -lah
+
+      - name: Setup directories
+        run: mkdir -p ${{ env.BROWSERTEST_OUTPUT_DIRECTORY }}
+
+      - name: Install Chrome
+        run: |
+          mkdir -p /etc/apt/keyrings
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list
+          apt-get update
+          apt-get install -y google-chrome-stable
+
+      - name: Install Chromedriver
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "jq is required but not installed"
+            exit 1
+          fi
+          CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3)
+          CHROMEDRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | jq -r --arg chrome_version "$CHROME_VERSION" '.channels.Stable.downloads.chromedriver[] | select(.platform == "linux64") | .url')
+          if [ -z "$CHROMEDRIVER_URL" ]; then
+            echo "No Chromedriver found for Chrome version $CHROME_VERSION, falling back to latest stable"
+            CHROMEDRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | jq -r '.channels.Stable.downloads.chromedriver[] | select(.platform == "linux64") | .url')
+          fi
+          wget "$CHROMEDRIVER_URL" -O /tmp/chromedriver.zip
+          unzip /tmp/chromedriver.zip chromedriver-linux64/chromedriver -d /usr/local/bin/
+          mv /usr/local/bin/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+          chmod +x /usr/local/bin/chromedriver
+          rm -rf /tmp/chromedriver.zip /usr/local/bin/chromedriver-linux64
+
+      - name: Start Chromedriver
+        run: chromedriver --url-base=/wd/hub --port=9515 --disable-gpu --headless --no-sandbox --disable-dev-shm-usage > /dev/null 2>&1 &
+
+      - name: Disable Xdebug if present
+        run: rm /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini || true
+
+      - name: Setup Simpletest directory
+        run: |
+          cd /opt/drupal/${{ env.WEBROOT_DIR }}
+          mkdir -p sites/simpletest
+          setfacl -Rdm u:www-data:rwX sites/simpletest
+          setfacl -Rm u:www-data:rwX sites/simpletest
+
+      - name: Run PHPUnit
+        run: |
+          cd /opt/drupal
+          phpunit -c "${{ env.PHPUNIT_CONFIG_FILE }}" --log-junit="${{ env.JUNIT_PATH }}/junit.xml" --colors=never --coverage-html "${{ env.PHPUNIT_COVERAGE_PATH }}" --coverage-cobertura "${{ env.PHPUNIT_COVERAGE_PATH }}/cobertura.xml" "${{ env.TEST_TARGET_DIRECTORY }}" --testdox
+
+        env:
+          SIMPLETEST_DB: ${{ env.SIMPLETEST_DB }}
+          SIMPLETEST_BASE_URL: ${{ env.SIMPLETEST_BASE_URL }}
+          BROWSERTEST_OUTPUT_DIRECTORY: ${{ env.BROWSERTEST_OUTPUT_DIRECTORY }}
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpunit-coverage
+          path: ${{ env.PHPUNIT_COVERAGE_PATH }}
+          if-no-files-found: ignore
+
+      - name: Upload JUnit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpunit-junit
+          path: ${{ env.JUNIT_PATH }}
+
+      - name: Upload browser output artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-output
+          path: ${{ env.BROWSERTEST_OUTPUT_DIRECTORY }}
+
+      - name: Publish test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: ${{ env.JUNIT_PATH }}/junit.xml
+
+  phpcs:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.drupal_version && inputs.php_version && format('drupal:{0}-php{1}-apache', inputs.drupal_version, inputs.php_version) || 'drupal:latest' }}
+      volumes:
+        - ${{ github.workspace }}:/opt/drupal
+
+    env:
+      PHPCS_CONFIG_FILE: /opt/drupal/${{ inputs.phpcs_config_file || 'phpcs.xml.dist' }}
+      PHPCS_TARGET_DIRECTORY: ${{ inputs.phpcs_target_directory || 'modules/custom/' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Update package index
+        run: apt-get update -y && apt-get upgrade -y
+
+      - name: Install system dependencies
+        run: |
+          apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
+
+      - name: Install project dependencies
+        run: |
+          set -x
+          cd /opt/drupal
+          echo "PHP version:"
+          php -v
+          echo "Composer version:"
+          composer --version
+          composer clear-cache || true
+          composer install --no-progress --prefer-dist --optimize-autoloader
+
+      - name: Run PHPCS
+        run: |
+          set -x
+          cd /opt/drupal
+          if [ -f vendor/bin/phpcs ]; then
+            vendor/bin/phpcs --standard=${{ env.PHPCS_CONFIG_FILE }} ${{ env.PHPCS_TARGET_DIRECTORY }}
+          else
+            echo "PHPCS binary not found at /opt/drupal/vendor/bin/phpcs"
+            exit 1
+          fi
+
+  phpstan:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.drupal_version && inputs.php_version && format('drupal:{0}-php{1}-apache', inputs.drupal_version, inputs.php_version) || 'drupal:latest' }}
+      volumes:
+        - ${{ github.workspace }}:/opt/drupal
+
+    env:
+      PHPSTAN_CONFIG_FILE: /opt/drupal/${{ inputs.phpstan_config_file || 'phpstan.neon' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Update package index
+        run: apt-get update -y && apt-get upgrade -y
+
+      - name: Install system dependencies
+        run: |
+          apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
+
+      - name: Install project dependencies
+        run: |
+          set -x
+          cd /opt/drupal
+          echo "PHP version:"
+          php -v
+          echo "Composer version:"
+          composer --version
+          composer clear-cache || true
+          composer install --no-progress --prefer-dist --optimize-autoloader
+
+      - name: Run PHPStan
+        run: |
+          set -x
+          cd /opt/drupal
+          if [ -f vendor/bin/phpstan ]; then
+            vendor/bin/phpstan analyse --configuration=${{ env.PHPSTAN_CONFIG_FILE }}
+          else
+            echo "PHPStan binary not found at /opt/drupal/vendor/bin/phpstan"
+            exit 1
+          fi
