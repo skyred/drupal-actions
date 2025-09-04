@@ -1,7 +1,6 @@
 name: Drupal Continuous Integration
 
 on:
-  push:
   workflow_call:
     inputs:
       drupal_version:
