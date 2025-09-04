@@ -216,7 +216,7 @@ jobs:
 
     env:
       PHPCS_CONFIG_FILE: /opt/drupal/${{ inputs.phpcs_config_file || 'phpcs.xml' }}
-      PHPCS_TARGET_DIRECTORY: ${{ inputs.phpcs_target_directory || 'modules/custom' }}
+      PHPCS_TARGET_DIRECTORY: ${{ inputs.phpcs_target_directory || format('{0}/modules/custom', inputs.webroot_dir || 'web') }}
 
     steps:
       - name: Checkout code
