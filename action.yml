@@ -12,7 +12,7 @@ inputs:
   php_version:
     description: 'PHP version to use'
     required: false
-    default: '8.3'
+    default: '8.4'
   mysql_version:
     description: 'MySQL version to use'
     required: false
@@ -52,7 +52,7 @@ inputs:
   phpcs_target_directory:
     description: 'Target directory for PHPCS'
     required: false
-    default: 'modules/custom themes/custom'
+    default: 'modules/custom'
   phpstan_config_file:
     description: 'PHPStan configuration file'
     required: false
@@ -60,19 +60,335 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Run Drupal CI Workflow
-      uses: .github/workflows/drupal_ci.yml
+    # PHPUnit Coverage Steps
+    - name: Checkout code (PHPUnit)
+      uses: actions/checkout@v5
       with:
-        drupal_version: ${{ inputs.drupal_version }}
-        php_version: ${{ inputs.php_version }}
-        mysql_version: ${{ inputs.mysql_version }}
-        phpunit_coverage_path: ${{ inputs.phpunit_coverage_path }}
-        phpunit_config_file: ${{ inputs.phpunit_config_file }}
-        test_target_directory: ${{ inputs.test_target_directory }}
-        junit_path: ${{ inputs.junit_path }}
-        simpletest_db: ${{ inputs.simpletest_db }}
-        browsertest_output_directory: ${{ inputs.browsertest_output_directory }}
-        simpletest_base_url: ${{ inputs.simpletest_base_url }}
-        phpcs_config_file: ${{ inputs.phpcs_config_file }}
-        phpcs_target_directory: ${{ inputs.phpcs_target_directory }}
-        phpstan_config_file: ${{ inputs.phpstan_config_file }}
+        path: /opt/drupal
+
+    - name: Update package index (PHPUnit)
+      shell: bash
+      run: apt-get update -y && apt-get upgrade -y
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install system dependencies (PHPUnit)
+      shell: bash
+      run: |
+        apt-get install -y git zip unzip wget gnupg acl curl libzip-dev libpng-dev default-mysql-client jq
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install PCOV (PHPUnit)
+      shell: bash
+      run: |
+        pecl install pcov
+        docker-php-ext-enable pcov
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install project dependencies (PHPUnit)
+      shell: bash
+      run: |
+        set -x
+        cd /opt/drupal
+        echo "PHP version:"
+        php -v
+        echo "Composer version:"
+        composer --version
+        composer clear-cache || true
+        composer install --no-progress --prefer-dist --optimize-autoloader
+        ls -lah
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Setup directories (PHPUnit)
+      shell: bash
+      run: mkdir -p /opt/drupal/${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install Chrome (PHPUnit)
+      shell: bash
+      run: |
+        mkdir -p /etc/apt/keyrings
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list
+        apt-get update
+        apt-get install -y google-chrome-stable
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install Chromedriver (PHPUnit)
+      shell: bash
+      run: |
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "jq is required but not installed"
+          exit 1
+        fi
+        CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3)
+        CHROMEDRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | jq -r --arg chrome_version "$CHROME_VERSION" '.channels.Stable.downloads.chromedriver[] | select(.platform == "linux64") | .url')
+        if [ -z "$CHROMEDRIVER_URL" ]; then
+          echo "No Chromedriver found for Chrome version $CHROME_VERSION, falling back to latest stable"
+          CHROMEDRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" | jq -r '.channels.Stable.downloads.chromedriver[] | select(.platform == "linux64") | .url')
+        fi
+        wget "$CHROMEDRIVER_URL" -O /tmp/chromedriver.zip
+        unzip /tmp/chromedriver.zip chromedriver-linux64/chromedriver -d /usr/local/bin/
+        mv /usr/local/bin/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+        chmod +x /usr/local/bin/chromedriver
+        rm -rf /tmp/chromedriver.zip /usr/local/bin/chromedriver-linux64
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Start Chromedriver (PHPUnit)
+      shell: bash
+      run: chromedriver --url-base=/wd/hub --port=9515 --disable-gpu --headless --no-sandbox --disable-dev-shm-usage > /dev/null 2>&1 &
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Disable Xdebug if present (PHPUnit)
+      shell: bash
+      run: rm /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini || true
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Setup Simpletest directory (PHPUnit)
+      shell: bash
+      run: |
+        cd /opt/drupal
+        mkdir -p sites/simpletest
+        setfacl -Rdm u:www-data:rwX sites/simpletest
+        setfacl -Rm u:www-data:rwX sites/simpletest
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Run PHPUnit
+      shell: bash
+      run: |
+        cd /opt/drupal
+        phpunit -c "${{ inputs.phpunit_config_file || 'phpunit.xml' }}" --log-junit="/opt/drupal/${{ inputs.junit_path || 'junit' }}/junit.xml" --colors=never --coverage-html "/opt/drupal/${{ inputs.phpunit_coverage_path || 'coverage' }}" --coverage-cobertura "/opt/drupal/${{ inputs.phpunit_coverage_path || 'coverage' }}/cobertura.xml" "${{ inputs.test_target_directory || '' }}" --testdox
+      env:
+        SIMPLETEST_DB: ${{ inputs.simpletest_db || 'mysql://root:mysql_strong_password@mysql/drupal' }}
+        SIMPLETEST_BASE_URL: ${{ inputs.simpletest_base_url || 'http://localhost' }}
+        BROWSERTEST_OUTPUT_DIRECTORY: /opt/drupal/${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+        services:
+          mysql:
+            image: mysql:${{ inputs.mysql_version || 'latest' }}
+            env:
+              MYSQL_ROOT_PASSWORD: mysql_strong_password
+              MYSQL_DATABASE: drupal
+            options: >-
+              --health-cmd="mysqladmin ping --silent"
+              --health-interval=10s
+              --health-timeout=5s
+              --health-retries=5
+            ports:
+              - 3306:3306
+
+    - name: Upload coverage artifact (PHPUnit)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: phpunit-coverage
+        path: /opt/drupal/${{ inputs.phpunit_coverage_path || 'coverage' }}
+        if-no-files-found: ignore
+
+    - name: Upload JUnit artifact (PHPUnit)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: phpunit-junit
+        path: /opt/drupal/${{ inputs.junit_path || 'junit' }}
+        if-no-files-found: ignore
+
+    - name: Upload browser output artifact (PHPUnit)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: browser-output
+        path: /opt/drupal/${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
+        if-no-files-found: ignore
+
+    - name: Publish test results (PHPUnit)
+      if: always()
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      with:
+        files: /opt/drupal/${{ inputs.junit_path || 'junit' }}/junit.xml
+
+    # PHPCS Steps
+    - name: Checkout code (PHPCS)
+      uses: actions/checkout@v5
+      with:
+        path: /opt/drupal
+
+    - name: Update package index (PHPCS)
+      shell: bash
+      run: apt-get update -y && apt-get upgrade -y
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install system dependencies (PHPCS)
+      shell: bash
+      run: |
+        apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install project dependencies (PHPCS)
+      shell: bash
+      run: |
+        set -x
+        cd /opt/drupal
+        echo "PHP version:"
+        php -v
+        echo "Composer version:"
+        composer --version
+        composer clear-cache || true
+        composer install --no-progress --prefer-dist --optimize-autoloader
+        if [ -d vendor/bin ]; then
+          echo "Listing vendor/bin directory:"
+          ls -lah vendor/bin
+          if [ -f vendor/bin/phpcs ]; then
+            chmod +x vendor/bin/phpcs
+            echo "Set executable permissions on vendor/bin/phpcs"
+            test -x vendor/bin/phpcs && echo "vendor/bin/phpcs is executable" || echo "vendor/bin/phpcs is not executable"
+          else
+            echo "PHPCS binary not found at vendor/bin/phpcs"
+            exit 1
+          fi
+        else
+          echo "vendor/bin directory not found"
+          exit 1
+        fi
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Run PHPCS
+      shell: bash
+      run: |
+        set -x
+        cd /opt/drupal
+        if [ -f vendor/bin/phpcs ]; then
+          vendor/bin/phpcs --standard=/opt/drupal/${{ inputs.phpcs_config_file || 'phpcs.xml.dist' }} ${{ inputs.phpcs_target_directory || 'modules/custom/' }}
+        else
+          echo "PHPCS binary not found at /opt/drupal/vendor/bin/phpcs"
+          exit 1
+        fi
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    # PHPStan Steps
+    - name: Checkout code (PHPStan)
+      uses: actions/checkout@v5
+      with:
+        path: /opt/drupal
+
+    - name: Update package index (PHPStan)
+      shell: bash
+      run: apt-get update -y && apt-get upgrade -y
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install system dependencies (PHPStan)
+      shell: bash
+      run: |
+        apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Install project dependencies (PHPStan)
+      shell: bash
+      run: |
+        set -x
+        cd /opt/drupal
+        echo "PHP version:"
+        php -v
+        echo "Composer version:"
+        composer --version
+        composer clear-cache || true
+        composer install --no-progress --prefer-dist --optimize-autoloader
+        if [ -d vendor/bin ]; then
+          echo "Listing vendor/bin directory:"
+          ls -lah vendor/bin
+          if [ -f vendor/bin/phpstan ]; then
+            chmod +x vendor/bin/phpstan
+            echo "Set executable permissions on vendor/bin/phpstan"
+            test -x vendor/bin/phpstan && echo "vendor/bin/phpstan is executable" || echo "vendor/bin/phpstan is not executable"
+          else
+            echo "PHPStan binary not found at vendor/bin/phpstan"
+            exit 1
+          fi
+        else
+          echo "vendor/bin directory not found"
+          exit 1
+        fi
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
+
+    - name: Run PHPStan
+      shell: bash
+      run: |
+        set -x
+        cd /opt/drupal
+        if [ -f vendor/bin/phpstan ]; then
+          vendor/bin/phpstan analyse --configuration=/opt/drupal/${{ inputs.phpstan_config_file || 'phpstan.neon' }}
+        else
+          echo "PHPStan binary not found at /opt/drupal/vendor/bin/phpstan"
+          exit 1
+        fi
+      container:
+        image: drupal:${{ inputs.drupal_version || 'latest' }}-php${{ inputs.php_version || '8.3' }}-apache
+        volumes:
+          - ${{ github.workspace }}:/opt/drupal
