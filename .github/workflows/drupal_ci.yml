@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: 'latest'
+      webroot_dir:
+        description: 'Web directory'
+        required: false
+        type: string
+        default: 'web'
       phpunit_coverage_path:
         description: 'Path for PHPUnit coverage output'
         required: false
@@ -62,7 +67,7 @@ on:
         description: 'Target directory for PHPCS'
         required: false
         type: string
-        default: 'modules/custom'
+        default: ''
       phpstan_config_file:
         description: 'PHPStan configuration file'
         required: false
@@ -91,6 +96,7 @@ jobs:
           - 3306:3306
 
     env:
+      WEBROOT_DIR: ${{ inputs.webroot_dir || 'web' }}
       PHPUNIT_COVERAGE_PATH: /opt/drupal/${{ inputs.phpunit_coverage_path || 'coverage' }}
       PHPUNIT_CONFIG_FILE: /opt/drupal/${{ inputs.phpunit_config_file || 'phpunit.xml' }}
       TEST_TARGET_DIRECTORY: ${{ inputs.test_target_directory || '' }}
@@ -168,20 +174,17 @@ jobs:
 
       - name: Run PHPUnit
         run: |
-          cd /opt/drupal
-          phpunit -c "${{ env.PHPUNIT_CONFIG_FILE }}" --log-junit="${{ env.JUNIT_PATH }}/junit.xml" --colors=never --coverage-html "${{ env.PHPUNIT_COVERAGE_PATH }}" --coverage-cobertura "${{ env.PHPUNIT_COVERAGE_PATH }}/cobertura.xml" "${{ env.TEST_TARGET_DIRECTORY }}" --testdox
-
         env:
-          SIMPLETEST_DB: ${{ env.SIMPLETEST_DB }}
-          SIMPLETEST_BASE_URL: ${{ env.SIMPLETEST_BASE_URL }}
-          BROWSERTEST_OUTPUT_DIRECTORY: ${{ env.BROWSERTEST_OUTPUT_DIRECTORY }}
+          SIMPLETEST_DB: ${{ inputs.simpletest_db || 'mysql://root:mysql_strong_password@mysql/drupal' }}
+          SIMPLETEST_BASE_URL: ${{ inputs.simpletest_base_url || 'http://localhost' }}
+          BROWSERTEST_OUTPUT_DIRECTORY: ${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
 
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phpunit-coverage
-          path: ${{ env.PHPUNIT_COVERAGE_PATH }}
+          path: ${{ inputs.phpunit_coverage_path || 'coverage' }}
           if-no-files-found: ignore
 
       - name: Upload JUnit artifact
@@ -189,20 +192,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: phpunit-junit
-          path: ${{ env.JUNIT_PATH }}
+          path: ${{ inputs.junit_path || 'junit' }}
 
       - name: Upload browser output artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: browser-output
-          path: ${{ env.BROWSERTEST_OUTPUT_DIRECTORY }}
+          path: ${{ inputs.browsertest_output_directory || '.tmp/browser_output' }}
 
       - name: Publish test results
         if: always()
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
-          files: ${{ env.JUNIT_PATH }}/junit.xml
+          files: ${{ inputs.junit_path || 'junit' }}/junit.xml
 
   phpcs:
     runs-on: ubuntu-latest
@@ -212,8 +215,8 @@ jobs:
         - ${{ github.workspace }}:/opt/drupal
 
     env:
-      PHPCS_CONFIG_FILE: /opt/drupal/${{ inputs.phpcs_config_file || 'phpcs.xml.dist' }}
-      PHPCS_TARGET_DIRECTORY: ${{ inputs.phpcs_target_directory || 'modules/custom/' }}
+      PHPCS_CONFIG_FILE: /opt/drupal/${{ inputs.phpcs_config_file || 'phpcs.xml' }}
+      PHPCS_TARGET_DIRECTORY: ${{ inputs.phpcs_target_directory || 'modules/custom' }}
 
     steps:
       - name: Checkout code
