@@ -58,5 +58,21 @@ inputs:
     required: false
     default: 'phpstan.neon'
 runs:
-  using: 'workflow'
-  main: '.github/workflows/phpunit-coverage.yml'
+  using: 'composite'
+  steps:
+    - name: Run Drupal CI Workflow
+      uses: .github/workflows/drupal_ci.yml
+      with:
+        drupal_version: ${{ inputs.drupal_version }}
+        php_version: ${{ inputs.php_version }}
+        mysql_version: ${{ inputs.mysql_version }}
+        phpunit_coverage_path: ${{ inputs.phpunit_coverage_path }}
+        phpunit_config_file: ${{ inputs.phpunit_config_file }}
+        test_target_directory: ${{ inputs.test_target_directory }}
+        junit_path: ${{ inputs.junit_path }}
+        simpletest_db: ${{ inputs.simpletest_db }}
+        browsertest_output_directory: ${{ inputs.browsertest_output_directory }}
+        simpletest_base_url: ${{ inputs.simpletest_base_url }}
+        phpcs_config_file: ${{ inputs.phpcs_config_file }}
+        phpcs_target_directory: ${{ inputs.phpcs_target_directory }}
+        phpstan_config_file: ${{ inputs.phpstan_config_file }}
