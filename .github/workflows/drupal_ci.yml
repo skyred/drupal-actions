@@ -272,6 +272,11 @@ jobs:
         run: |
           apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
 
+      - name: Set PHP memory limit
+        run: |
+          echo "memory_limit=-1" > /usr/local/etc/php/conf.d/memory-limit.ini
+          echo "Updated PHP memory limit to -1"
+
       - name: Install project dependencies
         run: |
           set -x
