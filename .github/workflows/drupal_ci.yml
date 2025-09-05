@@ -233,9 +233,6 @@ jobs:
         run: |
           set -x
           cd /opt/drupal
-          echo "PHP version:"
-          php -v
-          echo "Composer version:"
           composer --version
           composer clear-cache || true
           composer install --no-progress --prefer-dist --optimize-autoloader
@@ -276,9 +273,6 @@ jobs:
         run: |
           set -x
           cd /opt/drupal
-          echo "PHP version:"
-          php -v
-          echo "Composer version:"
           composer --version
           composer clear-cache || true
           composer install --no-progress --prefer-dist --optimize-autoloader
@@ -293,3 +287,27 @@ jobs:
             echo "PHPStan binary not found at /opt/drupal/vendor/bin/phpstan"
             exit 1
           fi
+
+  security-advisories:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.drupal_version && inputs.php_version && format('drupal:{0}-php{1}-apache', inputs.drupal_version, inputs.php_version) || 'drupal:latest' }}
+      volumes:
+        - ${{ github.workspace }}:/opt/drupal
+
+    env:
+      PHPSTAN_CONFIG_FILE: /opt/drupal/${{ inputs.phpstan_config_file || 'phpstan.neon' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install project dependencies and check security advisories
+        run: |
+          set -x
+          cd /opt/drupal
+          composer --version
+          composer clear-cache || true
+          composer install --no-progress --prefer-dist --optimize-autoloader
+          composer audit
+
