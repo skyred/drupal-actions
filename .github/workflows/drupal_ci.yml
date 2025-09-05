@@ -272,11 +272,6 @@ jobs:
         run: |
           apt-get install -y git zip unzip wget curl libzip-dev libpng-dev
 
-      - name: Set PHP memory limit
-        run: |
-          echo "memory_limit=-1" > /usr/local/etc/php/conf.d/memory-limit.ini
-          echo "Updated PHP memory limit to -1"
-
       - name: Install project dependencies
         run: |
           set -x
@@ -293,7 +288,7 @@ jobs:
           set -x
           cd /opt/drupal
           if [ -f vendor/bin/phpstan ]; then
-            vendor/bin/phpstan analyse --configuration=${{ env.PHPSTAN_CONFIG_FILE }}
+            vendor/bin/phpstan analyse --configuration=${{ env.PHPSTAN_CONFIG_FILE }} --memory-limit=-1
           else
             echo "PHPStan binary not found at /opt/drupal/vendor/bin/phpstan"
             exit 1
